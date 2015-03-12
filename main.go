@@ -2,12 +2,12 @@
 package main
 
 import (
-	"SQL2Class/MapSorter"
+	//"SQL2Class/MapSorter"
 	"database/sql"
 	"fmt"
 	_ "github.com/go-sql-driver/mysql"
 	"os"
-	"sort"
+	//"sort"
 	"strconv"
 	"strings"
 )
@@ -17,6 +17,26 @@ func checkError(err error) {
 		//fmt.Println(err)
 		panic(err.Error())
 	}
+}
+
+func create_file(path string) {
+	err := os.Remove(path)
+	if err != nil {
+		fmt.Println(err)
+	}
+
+	file, err := os.Create(path)
+	checkError(err)
+	file.Close()
+}
+
+func wirte_file(path string, content string) {
+	file, err := os.OpenFile(path, os.O_APPEND, 777)
+	checkError(err)
+	defer file.Close()
+
+	_, err = file.WriteString(content)
+	checkError(err)
 }
 
 func get_column_infos(column_type string) (type_name string, type_info string) {
@@ -111,97 +131,59 @@ func make_bd_template(dataSourceName string, sql_base string) {
 	checkError(err)
 	defer db.Close()
 
-	rows, err := db.Query("select table_name,column_type,column_name from INFORMATION_SCHEMA.columns where table_schema = '" + sql_base + "'")
+	rows, err := db.Query("select table_name,column_type,column_name from INFORMATION_SCHEMA.columns where table_schema = '" + sql_base + "' order by table_name")
 	checkError(err)
 	defer rows.Close()
 
-	struct_string := make(map[string]string)
-	map_string := make(map[string]string)
-	mapinit_string := make(map[string]string)
+	s_dbtemplate := "package DBStruct\n\n"
+	s_dbtemplateloader := "package DB\n\nimport (\n\t\"testMysql/DB/struct\"\n)\n\n"
+	s_dbtemplateloader_init := "func init() {\n"
 
-	var temp_column_type_name, table_name, column_name string
-	for rows.Next() {
-		err := rows.Scan(&table_name, &temp_column_type_name, &column_name)
+	table_name, temp_column_type, column_name := "", "", ""
+	for rows.Next() { //循环base表所有表格
+
+		t_tablename := table_name
+
+		err := rows.Scan(&table_name, &temp_column_type, &column_name)
 		checkError(err)
 
 		table_name = strings.ToUpper(table_name[0:1]) + table_name[1:]
 
-		_, ok := struct_string[table_name]
-		if !ok {
-			struct_string[table_name] = "type " + table_name + " struct {\n"
-		}
+		//var column_type, temp_column_type, column_name string
 
-		column_type_name, column_type_size := get_column_infos(temp_column_type_name)
+		column_type_name, column_type_size := get_column_infos(temp_column_type)
 		column_type := make_type(column_type_name, column_type_size)
 		column_type_common := make_type_common(column_type_name, column_type_size)
 		if column_name == "type" {
 			column_name = "_type"
 		}
-		struct_string[table_name] += "\t" + column_name + " " + column_type + "\n"
 
-		_, ok = mapinit_string[table_name]
-		if !ok {
-			map_string[table_name] = "var " + table_name + "s map[" + column_type_common + "]DBStruct." + table_name + "\n"
-			mapinit_string[table_name] = "\t" + table_name + "s := make(map[" + column_type_common + "]DBStruct." + table_name + ")\n\t_ = " + table_name + "s\n"
+		if t_tablename != table_name {
+			if t_tablename != "" {
+				s_dbtemplate += "}\n\n"
+			}
+			s_dbtemplate += "type " + table_name + " struct {\n"
+			s_dbtemplateloader += "var " + table_name + "s map[" + column_type_common + "]DBStruct." + table_name + "\n"
+			s_dbtemplateloader_init += "\t" + table_name + "s := make(map[" + column_type_common + "]DBStruct." + table_name + ")\n\t_ = " + table_name + "s\n"
 		}
+
+		s_dbtemplate += "\t" + column_name + " " + column_type + "\n"
 	}
 
-	mss := MapSorter.NewMapSorter(struct_string)
-	mms := MapSorter.NewMapSorter(map_string)
-	mmis := MapSorter.NewMapSorter(mapinit_string)
-	sort.Sort(mss)
-	sort.Sort(mms)
-	sort.Sort(mmis)
+	s_dbtemplate += "}"
+	s_dbtemplateloader_init += "}"
 
-	var final_struct_string string = "package DBStruct\n\n"
-	var final_map_string string = "package DB\n\nimport (\n\t\"testMysql/DB/struct\"\n)\n\n"
-	var final_mapinit_string string = "func init() {\n"
+	//db_template
+	create_file("temp\\db_templaet.go")
+	wirte_file("temp\\db_templaet.go", s_dbtemplate)
 
-	for _, val := range mss {
-		val.Val += "}\n\n"
-		final_struct_string += val.Val
-	}
+	//DBTemplateLoader
+	create_file("temp\\DBTemplateLoader.go")
+	wirte_file("temp\\DBTemplateLoader.go", s_dbtemplateloader+"\n"+s_dbtemplateloader_init)
 
-	for _, val := range mms {
-		final_map_string += val.Val
-	}
-
-	for _, val := range mmis {
-		final_mapinit_string += val.Val
-	}
-	final_mapinit_string += "}"
-
-	err = os.Remove("temp\\db_templaet.go")
-	if err != nil {
-		fmt.Println(err)
-	}
-
-	file, err := os.Create("temp\\db_templaet.go")
-	checkError(err)
-	file.Close()
-
-	file, err = os.OpenFile("temp\\db_templaet.go", os.O_APPEND, 777)
-	checkError(err)
-	defer file.Close()
-
-	_, err = file.WriteString(final_struct_string)
-	checkError(err)
-
-	err = os.Remove("temp\\DBTemplateLoader.go")
-	if err != nil {
-		fmt.Println(err)
-	}
-
-	file_loader, err := os.Create("temp\\DBTemplateLoader.go")
-	checkError(err)
-	file.Close()
-
-	file_loader, err = os.OpenFile("temp\\DBTemplateLoader.go", os.O_APPEND, 777)
-	checkError(err)
-	defer file_loader.Close()
-
-	_, err = file_loader.WriteString(final_map_string + "\n" + final_mapinit_string)
-	checkError(err)
+	//DBTemplateLoader2
+	create_file("temp\\DBTemplateLoader2.go")
+	wirte_file("temp\\DBTemplateLoader2.go", "package DB\n\nimport (\n\t\"testMysql/DB/struct\"\n)\n\nfunc post_load() {\n}")
 }
 
 func main() {
